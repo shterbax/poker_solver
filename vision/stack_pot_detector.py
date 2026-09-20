@@ -1,90 +1,100 @@
 import cv2
 import numpy as np
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional
+
 from core.ocr_engine import OcrEngine
+from core.models import NormalizedROI
+
+
+@dataclass(slots=True)
+class CacheEntry:
+    """Строгий контейнер для хранения закэшированного кропа и его значения."""
+    crop: np.ndarray
+    value: float
+
+
+@dataclass(slots=True)
+class StackPotResult:
+    """Строго типизированный результат распознавания."""
+    pot: float = 0.0
+    stacks: Dict[int, float] = field(default_factory=dict)
 
 
 class StackPotDetector:
-    def __init__(self, pot_dir: str = "assets/pots", stack_dir: str = "assets/stacks"):
-        # Единый экземпляр OCR для всех задач экономит ресурсы
+    def __init__(self, diff_threshold: float = 1.0):
+        # Порог изменения пикселей для сброса кэша (1.0 защищает от микро-шума видеосжатия)
+        self.diff_threshold = diff_threshold
         self.ocr = OcrEngine()
+        self.cache: Dict[str, CacheEntry] = {}
 
-        # Хранилище состояний: { "roi_name": {"crop": np.ndarray, "value": float} }
-        self.cache = {}
-
-    def _get_pixel_roi(self, roi_dict: dict, img_w: int, img_h: int) -> tuple:
-        """Переводит относительные координаты (0.0-1.0) в абсолютные пиксели."""
-        if not roi_dict:
-            return None
-        x = int(roi_dict["x"] * img_w)
-        y = int(roi_dict["y"] * img_h)
-        w = int(roi_dict["w"] * img_w)
-        h = int(roi_dict["h"] * img_h)
-        return x, y, w, h
-
-    def _process_crop_with_cache(self, roi_key: str, crop: np.ndarray, dump_raw: bool) -> float:
-        """Сравнивает пиксели с прошлым кадром. Если изменений нет, отдает кэш."""
-        if crop is None or crop.size == 0:
+    def _process_roi(
+            self,
+            frame: np.ndarray,
+            raw_roi: Optional[Dict[str, float]],
+            cache_key: str,
+            dump_raw: bool
+    ) -> float:
+        """Универсальный метод: извлекает кроп, проверяет кэш и вызывает OCR."""
+        if not raw_roi or frame is None or frame.size == 0:
             return 0.0
-
-        # 1. Проверяем наличие ROI в кэше
-        if roi_key in self.cache:
-            cached_crop = self.cache[roi_key]["crop"]
-
-            # Проверяем совпадение размеров
-            if cached_crop.shape == crop.shape:
-                # Вычисляем разницу пикселей (absdiff)
-                # Порог 1.0 защищает от микро-шума видеосжатия, если берется захват экрана
-                diff = cv2.absdiff(crop, cached_crop).mean()
-                if diff < 1.0:
-                    return self.cache[roi_key]["value"]
-
-        # 2. Если пиксели изменились — прогоняем через нейросеть
-        if dump_raw:
-            self.ocr.save_raw_crop(crop, roi_key)
-
-        val = self.ocr.recognize(crop)
-
-        # 3. Обновляем кэш. Обязательно используем .copy(),
-        # чтобы отвязать срез памяти от родительского кадра.
-        self.cache[roi_key] = {
-            "crop": crop.copy(),
-            "value": val
-        }
-
-        return val
-
-    def detect(self, frame: np.ndarray, profile_config: dict, dump_raw: bool = False) -> dict:
-        results = {
-            "pot": 0.0,
-            "stacks": {}
-        }
-
-        if frame is None or frame.size == 0:
-            return results
 
         img_h, img_w = frame.shape[:2]
 
-        # 1. Извлечение Pot
+        # Делегируем конвертацию координат датаклассу NormalizedROI
+        roi = NormalizedROI(**raw_roi)
+        x, y, w, h = roi.to_abs(frame_w=img_w, frame_h=img_h)
+        crop = frame[y:y + h, x:x + w]
+
+        if crop.size == 0:
+            return 0.0
+
+        # 1. Проверяем кэш на идентичность пикселей
+        if cache_key in self.cache:
+            cached = self.cache[cache_key]
+            if cached.crop.shape == crop.shape:
+                diff = cv2.absdiff(crop, cached.crop).mean()
+                if diff < self.diff_threshold:
+                    return cached.value
+
+        # 2. Если кадр изменился, прогоняем через OCR
+        if dump_raw:
+            self.ocr.save_raw_crop(crop, cache_key)
+
+        val = self.ocr.recognize(crop)
+
+        # 3. Сохраняем в кэш (ОБЯЗАТЕЛЬНО через .copy(), чтобы отвязать память от родительского кадра)
+        self.cache[cache_key] = CacheEntry(crop=crop.copy(), value=val)
+
+        return val
+
+    def detect(self, frame: np.ndarray, profile_config: Dict[str, Any], dump_raw: bool = False) -> StackPotResult:
+        """Сканирует кадр и возвращает структурированный объект с банком и стеками."""
+        result = StackPotResult()
+
+        if frame is None or frame.size == 0:
+            return result
+
+        # 1. Извлечение банка (Pot)
         global_rois = profile_config.get("global_rois", {})
-        pot_roi_dict = global_rois.get("pot_amount")
+        result.pot = self._process_roi(
+            frame=frame,
+            raw_roi=global_rois.get("pot_amount"),
+            cache_key="pot",
+            dump_raw=dump_raw
+        )
 
-        if pot_roi_dict:
-            x, y, w, h = self._get_pixel_roi(pot_roi_dict, img_w, img_h)
-            pot_crop = frame[y:y + h, x:x + w]
-            if pot_crop.size > 0:
-                results["pot"] = self._process_crop_with_cache("pot", pot_crop, dump_raw)
-
-        # 2. Извлечение стеков игроков
-        seats = profile_config.get("seats", [])
-        for seat in seats:
+        # 2. Извлечение стеков игроков (Stacks)
+        for seat in profile_config.get("seats", []):
             seat_id = seat.get("seat_id")
-            stack_roi_dict = seat.get("stack")
+            if seat_id is not None:
+                stack_val = self._process_roi(
+                    frame=frame,
+                    raw_roi=seat.get("stack"),
+                    cache_key=f"seat_{seat_id}",
+                    dump_raw=dump_raw
+                )
+                if stack_val > 0.0:
+                    result.stacks[seat_id] = stack_val
 
-            if seat_id is not None and stack_roi_dict:
-                x, y, w, h = self._get_pixel_roi(stack_roi_dict, img_w, img_h)
-                stack_crop = frame[y:y + h, x:x + w]
-                if stack_crop.size > 0:
-                    roi_key = f"seat_{seat_id}"
-                    results["stacks"][seat_id] = self._process_crop_with_cache(roi_key, stack_crop, dump_raw)
-
-        return results
+        return result

@@ -14,9 +14,6 @@ def run_test():
     )
     test_frame_path = os.path.join(BASE_DIR, "tests", "test_table.png")
 
-    pot_dir = os.path.join(BASE_DIR, "assets", "pots")
-    stack_dir = os.path.join(BASE_DIR, "assets", "stacks")
-
     if not os.path.exists(profile_path):
         print(f"[-] Ошибка: Конфиг {profile_path} не найден.")
         return
@@ -24,7 +21,8 @@ def run_test():
     with open(profile_path, "r", encoding="utf-8") as f:
         profile = json.load(f)
 
-    detector = StackPotDetector(pot_dir=pot_dir, stack_dir=stack_dir)
+    # Инициализация без лишних kwargs
+    detector = StackPotDetector(diff_threshold=1.0)
 
     if os.path.exists(test_frame_path):
         frame = cv2.imread(test_frame_path)
@@ -52,8 +50,9 @@ def run_test():
     print("\n========================================")
     print(" РЕЗУЛЬТАТЫ РАСПОЗНАВАНИЯ ")
     print("========================================")
-    print(f" Total Pot : {results['pot']}")
-    for seat_id, stack_val in results["stacks"].items():
+    # Обращение к полям через атрибуты датакласса, а не ключи словаря
+    print(f" Total Pot : {results.pot}")
+    for seat_id, stack_val in results.stacks.items():
         print(f" Seat {seat_id:<6} : {stack_val}")
 
     print("\n----------------------------------------")

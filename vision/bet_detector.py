@@ -1,23 +1,16 @@
 import cv2
 import numpy as np
 import re
-import os
+from typing import Dict
+
 from core.ocr_engine import OcrEngine
+from core.models import NormalizedROI  # Импортируем твою модель
 
 
 class BetDetector:
     def __init__(self, ocr_engine: OcrEngine = None):
-        self.ocr = ocr_engine if ocr_engine else OcrEngine()
+        self.ocr = ocr_engine or OcrEngine()
         self.cache = {}
-
-    def _get_pixel_roi(self, roi_dict: dict, img_w: int, img_h: int) -> tuple:
-        if not roi_dict:
-            return None
-        x = int(roi_dict.get("x", 0) * img_w)
-        y = int(roi_dict.get("y", 0) * img_h)
-        w = int(roi_dict.get("w", roi_dict.get("width", 0)) * img_w)
-        h = int(roi_dict.get("h", roi_dict.get("height", 0)) * img_h)
-        return x, y, w, h
 
     def _parse_bet_amount(self, raw_text: str) -> float:
         if not raw_text:
@@ -26,6 +19,7 @@ class BetDetector:
         text = raw_text.lower()
         text = re.sub(r'bb|бб|\$|€|₽', '', text)
 
+        # Нормализация частых ошибок OCR
         char_map = {
             'z': '2', 'з': '2', 'э': '2',
             's': '5', 'o': '0', 'q': '0',
@@ -35,23 +29,19 @@ class BetDetector:
             text = text.replace(char, digit)
 
         match = re.search(r'\d+(?:\.\d+)?', text)
-        if match:
-            try:
-                return float(match.group(0))
-            except ValueError:
-                return 0.0
-
-        return 0.0
+        return float(match.group(0)) if match else 0.0
 
     def _recognize_bet(self, crop: np.ndarray) -> float:
         if crop is None or crop.size == 0:
             return 0.0
 
+        # Препроцессинг для улучшения OCR
         padded = cv2.copyMakeBorder(crop, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=(0, 0, 0))
         resized = cv2.resize(padded, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
 
         results, _ = self.ocr.engine(resized)
 
+        # Фолбэк: если стандартный скан не сработал, пробуем через ЧБ контраст
         if not results:
             gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
             gray = cv2.normalize(gray, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
@@ -64,55 +54,58 @@ class BetDetector:
         raw_text = "".join([res[1] for res in results])
         return self._parse_bet_amount(raw_text)
 
-    def _process_crop_with_cache(self, roi_key: str, crop: np.ndarray, dump_raw: bool) -> float:
+    def _process_crop_with_cache(self, roi_key: str, crop: np.ndarray) -> float:
+        """Сравнивает текущий кроп с кэшем. Если пиксели почти не изменились — отдаем старое значение."""
         if crop is None or crop.size == 0:
             return 0.0
 
-        if not dump_raw and roi_key in self.cache:
+        if roi_key in self.cache:
             cached_crop = self.cache[roi_key]["crop"]
-            if cached_crop.shape == crop.shape:
-                if cv2.absdiff(crop, cached_crop).mean() < 1.0:
-                    return self.cache[roi_key]["value"]
+            # Быстрая проверка на идентичность кадров
+            if cached_crop.shape == crop.shape and cv2.absdiff(crop, cached_crop).mean() < 1.0:
+                return self.cache[roi_key]["value"]
 
-        if dump_raw:
-            os.makedirs("debug_crops", exist_ok=True)
-            cv2.imwrite(f"debug_crops/{roi_key}.png", crop)
-
+        # Если кадр обновился (фишки/цифры изменились), прогоняем OCR
         val = self._recognize_bet(crop)
-
-        self.cache[roi_key] = {
-            "crop": crop.copy(),
-            "value": val
-        }
-
+        self.cache[roi_key] = {"crop": crop.copy(), "value": val}
         return val
 
-    def detect(self, frame: np.ndarray, profile_config: dict, dump_raw: bool = False) -> dict:
+    def detect(self, frame: np.ndarray, profile_config: dict) -> Dict[int, float]:
+        """
+        Возвращает плоский словарь {seat_id: bet_amount}.
+        Идеально маппится на PlayerState.current_bet_bb из models.py.
+        """
         results = {}
         if frame is None or frame.size == 0:
             return results
 
         img_h, img_w = frame.shape[:2]
-        seats = profile_config.get("seats", [])
 
-        for seat in seats:
+        for seat in profile_config.get("seats", []):
             seat_id = seat.get("seat_id", seat.get("seat", seat.get("id")))
             if seat_id is None:
                 continue
 
-            bet_roi_dict = seat.get("bet")
-            seat_result = {"bet": 0.0}
+            bet_roi_raw = seat.get("bet")
+            if not bet_roi_raw:
+                results[seat_id] = 0.0
+                continue
 
-            if bet_roi_dict:
-                box = self._get_pixel_roi(bet_roi_dict, img_w, img_h)
-                if box:
-                    x, y, w, h = box
-                    bet_crop = frame[max(0, y):y + h, max(0, x):x + w]
-                    if bet_crop.size > 0:
-                        seat_result["bet"] = self._process_crop_with_cache(
-                            f"bet_{seat_id}", bet_crop, dump_raw=dump_raw
-                        )
+            # Используем NormalizedROI из core/models.py для правильной типизации и перевода
+            roi = NormalizedROI(
+                x=bet_roi_raw.get("x", 0.0),
+                y=bet_roi_raw.get("y", 0.0),
+                w=bet_roi_raw.get("w", bet_roi_raw.get("width", 0.0)),
+                h=bet_roi_raw.get("h", bet_roi_raw.get("height", 0.0))
+            )
 
-            results[seat_id] = seat_result
+            # Получаем абсолютные координаты через метод модели
+            x, y, w, h = roi.to_abs(img_w, img_h)
+
+            # Защита от выхода за границы кадра
+            bet_crop = frame[max(0, y):y + h, max(0, x):x + w]
+
+            # Сохраняем только итоговое float значение, без лишней вложенности
+            results[seat_id] = self._process_crop_with_cache(f"bet_{seat_id}", bet_crop)
 
         return results

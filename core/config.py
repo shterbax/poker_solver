@@ -5,12 +5,15 @@ from pathlib import Path
 
 @dataclass
 class AppConfig:
-    active_deck: str = "four-color"
+    language: str = "ru"
+    active_deck: str = "full-color"
     active_profile: str = "coinpoker_6max_cash.json"
-    card_detector_threshold: float = 0.75,
+    card_detector_threshold: float = 0.75
+    status_detector_threshold: float = 0.60
     dealer_detector_threshold: float = 0.80
-    hero_left_angle: float = -12.0
-    hero_right_angle: float = 12.0
+    hero_left_angle: float = -4.75
+    hero_right_angle: float = 4.75
+
 
     @property
     def profile_path(self) -> Path:

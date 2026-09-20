@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 class StatusDetector:
-    def __init__(self, templates_dir: Path = None, threshold: float = 0.66):
+    def __init__(self, templates_dir: Path = None, threshold: float = 0.60):
         """
         :param templates_dir: Путь к папке с эталонными картинками (assets/status/ru)
         :param threshold: Порог точности совпадения (0.8 = 80% сходства)
