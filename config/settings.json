@@ -1,0 +1,14 @@
+{
+  "client": {
+    "language": "ru"
+  },
+  "status_detector": {
+    "threshold": 0.62
+  },
+  "active_deck": "full-color",
+  "active_profile": "coinpoker_7max_mtt.json",
+  "card_detector_threshold": 0.75,
+  "dealer_detector_threshold": 0.80,
+  "hero_left_angle": -4.75,
+  "hero_right_angle": 4.75
+}
