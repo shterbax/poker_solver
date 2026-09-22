@@ -1,68 +1,89 @@
 import cv2
 import numpy as np
 from pathlib import Path
+from typing import Dict, Optional
+
+from core.models import PlayerStatus
+from core.config import AppConfig
 
 
 class StatusDetector:
-    def __init__(self, templates_dir: Path = None, threshold: float = 0.60):
-        """
-        :param templates_dir: Путь к папке с эталонными картинками (assets/status/ru)
-        :param threshold: Порог точности совпадения (0.8 = 80% сходства)
-        """
-        if templates_dir is None:
-            # По умолчанию ищем относительно корня проекта
-            BASE_DIR = Path(__file__).resolve().parent.parent
-            templates_dir = BASE_DIR / "assets" / "status" / "ru"
+    def __init__(self, config: Optional[AppConfig] = None):
+        self.config = config or AppConfig.load()
 
-        self.templates_dir = Path(templates_dir)
-        self.threshold = threshold
-        self.templates = {}
+        # Берем настройки исключительно из единого конфигуратора
+        self.threshold = self.config.status_detector_threshold
 
+        # Динамический путь на основе языка из конфига
+        base_dir = Path(__file__).resolve().parent.parent
+        self.templates_dir = base_dir / "assets" / "status" / self.config.language
+
+        self.templates: Dict[PlayerStatus, np.ndarray] = {}
         self._load_templates()
 
-    def _load_templates(self):
-        """Загружает все шаблоны из папки assets/status/ru."""
+    def _load_templates(self) -> None:
+        """Загружает шаблоны и строго привязывает их к значениям PlayerStatus."""
         if not self.templates_dir.exists():
-            print(f"[ERROR] Папка с шаблонами не найдена: {self.templates_dir}")
+            print(f"⚠️ Папка с шаблонами статусов не найдена: {self.templates_dir}")
             return
 
+        # 1. Динамически собираем все допустимые значения прямо из Enum
+        status_map = {item.value: item for item in PlayerStatus}
+
+        # 2. Алиасы на случай старых/альтернативных названий файлов (чтобы не переименовывать их на диске)
+        aliases = {
+            "fold": PlayerStatus.FOLDED,
+            "all-in": PlayerStatus.ALL_IN
+        }
+
+        count = 0
         for file_path in self.templates_dir.glob("*.png"):
             template = cv2.imread(str(file_path), cv2.IMREAD_COLOR)
-            if template is not None:
-                # Имя файла без расширения используем как название статуса (например, "fold", "check")
-                status_name = file_path.stem.lower()
-                self.templates[status_name] = template
+            if template is None:
+                continue
 
-    def detect(self, crop_image) -> str:
+            name = file_path.stem.lower()
+
+            # Ищем статус в основном словаре Enum, если нет — проверяем алиасы
+            status_enum = status_map.get(name) or aliases.get(name)
+
+            if status_enum:
+                self.templates[status_enum] = template
+                count += 1
+            else:
+                # Предупреждаем о файлах-сиротах (помогает отлавливать опечатки в названиях файлов)
+                print(f"⚠️ Файл '{file_path.name}' не соответствует ни одному статусу из PlayerStatus. Пропускаем.")
+
+        # print(f"✅ Загружено шаблонов статусов ({self.config.language}): {count}")
+
+    def detect(self, crop: np.ndarray) -> PlayerStatus:
         """
-        Сравнивает кроп статуса с загруженными шаблонами.
+        Сравнивает кроп статуса с эталонами. Возвращает PlayerStatus Enum.
+        Если совпадений нет (нет бейджа) — считается, что игрок ACTIVE.
         """
-        if isinstance(crop_image, (str, Path)):
-            crop_image = cv2.imread(str(crop_image))
+        if crop is None or crop.size == 0:
+            return PlayerStatus.EMPTY
 
-        if crop_image is None or crop_image.size == 0:
-            return "empty"
+        best_match_status = PlayerStatus.ACTIVE
+        best_match_val = -1.0
 
-        best_match_name = "unknown"
-        best_match_val = 0.0
-
-        for status_name, template in self.templates.items():
-            # Шаблон должен быть меньше или равен по размеру анализируемому кропу
+        for status_enum, template in self.templates.items():
             th, tw = template.shape[:2]
-            ih, iw = crop_image.shape[:2]
+            ih, iw = crop.shape[:2]
+
             if ih < th or iw < tw:
                 continue
 
-            # Сравнение по шаблону
-            result = cv2.matchTemplate(crop_image, template, cv2.TM_CCOEFF_NORMED)
+            result = cv2.matchTemplate(crop, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv2.minMaxLoc(result)
 
             if max_val > best_match_val:
                 best_match_val = max_val
-                best_match_name = status_name
+                best_match_status = status_enum
 
-        # Если лучшее совпадение выше порога — возвращаем имя статуса
         if best_match_val >= self.threshold:
-            return best_match_name
+            return best_match_status
 
-        return "unknown"
+        # Если уверенность ниже порога (плашки Check/Call/Fold нет на экране),
+        # значит игрок активно сидит в раздаче и думает.
+        return PlayerStatus.ACTIVE

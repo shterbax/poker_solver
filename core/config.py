@@ -5,6 +5,7 @@ from pathlib import Path
 
 @dataclass
 class AppConfig:
+    client: str = "coinpoker"
     language: str = "ru"
     active_deck: str = "full-color"
     active_profile: str = "coinpoker_6max_cash.json"

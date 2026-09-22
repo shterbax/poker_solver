@@ -49,6 +49,15 @@ class PlayerStatus(str, Enum):
     FOLDED = "folded"  # Сбросил карты
     ALL_IN = "all_in"  # Пошел олл-ин
     EMPTY = "empty"  # Пустое место
+    BB = "bb"
+    SB = "sb"
+    CALL = "call"
+    BANK = "bank"
+    BET = "bet"
+    CHECK = "check"
+    DISCONNECT = "disconnect"
+    RAISE = "raise"
+    STRADDLE = "straddle"
 
 
 class GameType(str, Enum):

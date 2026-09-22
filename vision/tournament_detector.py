@@ -35,7 +35,9 @@ class TournamentInfoCollector:
 
         self._blinds_pattern = re.compile(r'([\d\.\,]+[km]?)\s*[/|\\]\s*([\d\.\,]+[km]?)')
         self._rank_players_pattern = re.compile(r'(\d+)\s*[/|\\]\s*(\d+)')
-        self._avg_stack_pattern = re.compile(r'([\d\.]+)\s*(?:bb|вв)')
+        self._avg_stack_pattern = re.compile(
+            r"(?:стек|ctek)\D*?(\d+(?:\.\d+)?)"
+        )
 
     def _normalize_text(self, text: str) -> str:
         """Приводит смесь латиницы/кириллицы к единому каноническому нижнему регистру."""
