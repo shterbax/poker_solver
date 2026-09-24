@@ -277,8 +277,8 @@ class CardDetector:
         file_name = f"{timestamp}_{side}_sc{score:.2f}_{img_hash}.png"
         file_path = self.unlabeled_dir / file_name
 
-        cv2.imwrite(str(file_path), crop_32)
-        print(f"📥 Карта сохранена в unlabeled ({self.active_theme}): {file_name}")
+        # cv2.imwrite(str(file_path), crop_32)
+        # print(f"📥 Карта сохранена в unlabeled ({self.active_theme}): {file_name}")
 
     def _match_card(self, crop: np.ndarray, angle: float, side: str) -> Tuple[Optional[Card], float, str]:
         if crop is None or crop.size == 0:

@@ -29,15 +29,16 @@ class TournamentInfoCollector:
         self._last_crop_hash: Optional[str] = None
         self._current_state: TournamentState = TournamentState()
 
-        # Чистые, читаемые регулярки по нормализованному тексту
-        self._level_strict_pattern = re.compile(r'(?:уровень|level)\D*?(\d{1,2})')
+        # 1. Паттерн для случая, когда уровень склеился с таймером MM:SS (например, "уровень 401:12" -> уровень 4)
+        self._level_glued_pattern = re.compile(r'(?:уровень|level)\D*?(\d{1,2})(?=\d{2}:\d{2})')
+
+        # 2. Стандартный поиск уровня
+        self._level_strict_pattern = re.compile(r'(?:уровень|level)\D*?(\d{1,2})\b')
         self._level_fallback_pattern = re.compile(r'^\D*?(\d{1,2})\D+?\d{1,2}:\d{2}')
 
         self._blinds_pattern = re.compile(r'([\d\.\,]+[km]?)\s*[/|\\]\s*([\d\.\,]+[km]?)')
         self._rank_players_pattern = re.compile(r'(\d+)\s*[/|\\]\s*(\d+)')
-        self._avg_stack_pattern = re.compile(
-            r"(?:стек|ctek)\D*?(\d+(?:\.\d+)?)"
-        )
+        self._avg_stack_pattern = re.compile(r"(?:стек|ctek)\D*?(\d+(?:\.\d+)?)")
 
     def _normalize_text(self, text: str) -> str:
         """Приводит смесь латиницы/кириллицы к единому каноническому нижнему регистру."""
@@ -60,15 +61,20 @@ class TournamentInfoCollector:
         return cv2.cvtColor(scaled, cv2.COLOR_GRAY2BGR)
 
     def parse_level(self, text: str) -> Optional[int]:
-        """Устойчивый парсинг уровня с двухэтапной защитой."""
+        """Устойчивый парсинг уровня с защитой от склеивания с таймером."""
         norm_text = self._normalize_text(text)
 
-        # 1. Основной поиск по нормализованному слову "уровень / level"
+        # 1. Проверяем склейку с таймером (например, "401:12" -> забирает 4, игнорируя 01:12)
+        glued_match = self._level_glued_pattern.search(norm_text)
+        if glued_match:
+            return int(glued_match.group(1))
+
+        # 2. Основной поиск по нормализованному слову "уровень / level"
         match = self._level_strict_pattern.search(norm_text)
         if match:
             return int(match.group(1))
 
-        # 2. Резервный поиск: первое число перед таймером (например, "12...02:08")
+        # 3. Резервный поиск
         fallback_match = self._level_fallback_pattern.search(norm_text)
         if fallback_match:
             return int(fallback_match.group(1))
@@ -163,8 +169,8 @@ class TournamentInfoCollector:
         level = self.parse_level(raw_text)
         blinds = None
 
-        print(f"[DEBUG] Сырой текст OCR: {repr(raw_text)}")
-        print(f"[DEBUG] Распознанный уровень: {level}")
+        # print(f"[DEBUG] Сырой текст OCR: {repr(raw_text)}")
+        # print(f"[DEBUG] Распознанный уровень: {level}")
 
         if level is not None:
             level_info = self._get_level_from_manager(level)

@@ -10,7 +10,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def run_test():
     profile_path = os.path.join(
-        BASE_DIR, "config", "profiles", "coinpoker_7max_mtt.json"
+        BASE_DIR, "config", "profiles", "coinpoker_6max_cash.json"
     )
     test_frame_path = os.path.join(BASE_DIR, "tests", "test_table.png")
 

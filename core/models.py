@@ -2,30 +2,30 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict
 import numpy as np
-
-from typing import Optional
 from pydantic import BaseModel, Field
+
 
 class BlindLevel(BaseModel):
     small_blind: int = 0
     big_blind: int = 0
     ante: int = 0
 
+
 class TournamentState(BaseModel):
     level: Optional[int] = None
     blinds: BlindLevel = Field(default_factory=BlindLevel)
-    hero_rank: Optional[int] = None          # Место в турнире (первое число дроби)
-    players_remaining: Optional[int] = None  # Осталось игроков (второе число дроби)
+    hero_rank: Optional[int] = None          # Место в турнире
+    players_remaining: Optional[int] = None  # Осталось игроков
     avg_stack: Optional[float] = None        # Средний стек (в BB)
     total_entries: Optional[int] = None
     is_valid: bool = False
 
 
 class Suit(str, Enum):
-    SPADES = "s"  # Пики
-    HEARTS = "h"  # Черви
-    DIAMONDS = "d"  # Бубны
-    CLUBS = "c"  # Трефы
+    SPADES = "s"
+    HEARTS = "h"
+    DIAMONDS = "d"
+    CLUBS = "c"
 
 
 class Rank(str, Enum):
@@ -45,10 +45,10 @@ class Rank(str, Enum):
 
 
 class PlayerStatus(str, Enum):
-    ACTIVE = "active"  # Игрок в игре
-    FOLDED = "folded"  # Сбросил карты
-    ALL_IN = "all_in"  # Пошел олл-ин
-    EMPTY = "empty"  # Пустое место
+    ACTIVE = "active"
+    FOLDED = "folded"
+    ALL_IN = "all_in"
+    EMPTY = "empty"
     BB = "bb"
     SB = "sb"
     CALL = "call"
@@ -60,9 +60,57 @@ class PlayerStatus(str, Enum):
     STRADDLE = "straddle"
 
 
+class Position(str, Enum):
+    BTN = "BTN"
+    SB = "SB"
+    BB = "BB"
+    UTG = "UTG"
+    UTG1 = "UTG+1"
+    MP = "MP"
+    CO = "CO"
+
+
 class GameType(str, Enum):
     CASH_6MAX = "6max_cash"
     MTT_7MAX = "7max_mtt"
+
+    @property
+    def max_seats(self) -> int:
+        """Максимальное количество мест за столом."""
+        return 6 if self == GameType.CASH_6MAX else 7
+
+    @property
+    def position_order(self) -> List[Position]:
+        """
+        Строгий порядок позиций по часовой стрелке, начиная с баттона (BTN = смещение 0).
+        """
+        if self == GameType.CASH_6MAX:
+            return [
+                Position.BTN,
+                Position.SB,
+                Position.BB,
+                Position.UTG,
+                Position.MP,
+                Position.CO,
+            ]
+        elif self == GameType.MTT_7MAX:
+            return [
+                Position.BTN,
+                Position.SB,
+                Position.BB,
+                Position.UTG,
+                Position.UTG1,
+                Position.MP,
+                Position.CO,
+            ]
+        return []
+
+    def get_position_for_offset(self, offset: int) -> Optional[Position]:
+        """Возвращает позицию по смещению от дилера."""
+        order = self.position_order
+        if not order:
+            return None
+        return order[offset % len(order)]
 
 
 @dataclass(slots=True)
@@ -83,7 +131,6 @@ class NormalizedROI:
     h: float
 
     def to_abs(self, frame_w: int, frame_h: int) -> tuple[int, int, int, int]:
-        """Перевод нормализованных координат (0.0-1.0) в абсолютные пиксели."""
         abs_x = int(self.x * frame_w)
         abs_y = int(self.y * frame_h)
         abs_w = int(self.w * frame_w)
@@ -93,7 +140,6 @@ class NormalizedROI:
 
 @dataclass
 class RawCroppedFrame:
-    """Объект-контейнер для вырезанных np.ndarray кропов одного кадра."""
     timestamp: float
     pot_crop: Optional[np.ndarray] = None
     board_crops: List[np.ndarray] = field(default_factory=list)
@@ -110,7 +156,7 @@ class PlayerState:
     status: PlayerStatus = PlayerStatus.ACTIVE
     is_dealer: bool = False
     is_turn: bool = False
-    position_label: Optional[str] = None  # BTN, SB, BB, UTG, CO...
+    position: Optional[Position] = None  # Использование строгого Enum вместо str
 
 
 @dataclass
@@ -122,8 +168,12 @@ class TableState:
     players: List[PlayerState] = field(default_factory=list)
     is_hero_turn: bool = False
     dealer_seat_id: Optional[int] = None
+    # Лимит кэш-игры (опционально для MTT)
+    cash_stakes: Optional[str] = None
+    postflop_history: str = "No postflop actions yet."
 
     # Дополнительные турнирные поля (MTT)
+    tournament_state: Optional[TournamentState] = None  # 👈 ДОБАВЬТЕ ЭТУ СТРОКУ
     tournament_avg_stack_bb: Optional[float] = None
     players_remaining: Optional[int] = None
 
@@ -132,3 +182,25 @@ class TableState:
             if p.is_hero:
                 return p
         return None
+
+    @property
+    def hero_position(self) -> Optional[Position]:
+        """Быстрый доступ к позиции Hero."""
+        hero = self.get_hero()
+        return hero.position if hero else None
+
+    def calculate_positions(self) -> None:
+        """
+        Автоматически рассчитывает и проставляет позиции всем игрокам
+        на основе dealer_seat_id и выбранного формата игры.
+        """
+        if self.dealer_seat_id is None:
+            return
+
+        total_seats = self.game_type.max_seats
+
+        for player in self.players:
+            # Смещение кресла по часовой стрелке относительно BTN
+            offset = (player.seat_id - self.dealer_seat_id) % total_seats
+            player.position = self.game_type.get_position_for_offset(offset)
+            player.is_dealer = (player.seat_id == self.dealer_seat_id)

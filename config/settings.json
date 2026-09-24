@@ -2,10 +2,16 @@
   "client": {
     "language": "ru"
   },
+  "language": "ru",
   "active_deck": "full-color",
-  "active_profile": "coinpoker_7max_mtt.json",
+  "game_type": "CASH_6MAX",
+  "active_profile": "coinpoker_6max_cash.json",
+  "cash_stakes": "$0.01/$0.02 (NL2)",
   "card_detector_threshold": 0.75,
-  "dealer_detector_threshold": 0.80,
+  "status_detector_threshold": 0.6,
+  "dealer_detector_threshold": 0.8,
   "hero_left_angle": -4.75,
-  "hero_right_angle": 4.75
+  "hero_right_angle": 4.75,
+  "llm_model": "qwen3-4b-pokerbench-grpo",
+  "llm_url": "http://localhost:11434/api/generate"
 }
